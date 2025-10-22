@@ -81,25 +81,30 @@ app.get("/tarjetas", async (req, res) => {
   try {
     const tarjetas = await prisma.tarjeta.findMany({
       include: { partido: true, usuarios: true },
+      orderBy: { id: "desc" },
     });
-    res.json(tarjetas);
-        const tarjetasFormateadas = tarjetas.map(tarjeta => ({
+
+    const tarjetasFormateadas = tarjetas.map((tarjeta) => ({
       id: tarjeta.id,
       nombre: tarjeta.partido.cancha,
       direccion: tarjeta.partido.lugar,
       jugadores: tarjeta.partido.jugadoresFaltantes,
       fecha: `${tarjeta.partido.dia} ${tarjeta.partido.hora}`,
-      image: tarjeta.imagen, 
+      image: tarjeta.imagen,
       usuario: `Usuario ${tarjeta.partido.usuarioId}`,
-      inscritos: tarjeta.usuarios
+      inscritos: tarjeta.usuarios.map((u) => ({
+        id: u.id,
+        nombre: u.nombre,
+      })),
     }));
-    
-    res.json(tarjetasFormateadas);
+
+    res.json(tarjetasFormateadas); 
   } catch (err) {
-    console.error(err);
+    console.error("Error al obtener tarjetas:", err);
     res.status(500).json({ error: "Error al obtener tarjetas" });
   }
 });
+
 
 // Inscribir usuario en una tarjeta
 app.post("/tarjetas/:id/inscribir", async (req, res) => {
