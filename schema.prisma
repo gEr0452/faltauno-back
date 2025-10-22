@@ -1,0 +1,42 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Usuario {
+  id                  Int       @id @default(autoincrement())
+  nombre              String
+  correo              String    @unique
+  password            String
+  diasDisponibles     String?
+  horariosDisponibles String?
+  barriosPreferidos   String?
+  historial           Partido[] @relation("UsuarioAPartidos")
+  tarjetasInscritas   Tarjeta[] @relation("UsuariosInscriptos")
+  imagen              String? 
+}
+
+model Partido {
+  id                 Int      @id @default(autoincrement())
+  cancha             String
+  lugar              String
+  dia                String
+  hora               String
+  jugadoresFaltantes Int
+  usuario            Usuario  @relation("UsuarioAPartidos", fields: [usuarioId], references: [id])
+  usuarioId          Int
+  tarjeta            Tarjeta?
+}
+
+model Tarjeta {
+  id        Int        @id @default(autoincrement())
+  partido   Partido    @relation(fields: [partidoId], references: [id])
+  partidoId Int        @unique
+  usuarios  Usuario[]  @relation("UsuariosInscriptos")
+  imagen    String?
+}
