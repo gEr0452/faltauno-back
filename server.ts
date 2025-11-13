@@ -77,7 +77,10 @@ app.post("/partidos", async (req, res) => {
 app.get("/partidos", async (req, res) => {
   try {
     const partidos = await prisma.partido.findMany({
-      include: { usuario: true },
+      include: {
+        usuario: true,
+        tarjeta: { include: { usuarios: true } },
+      },
       orderBy: { hora: "desc" },
     });
     res.json(partidos);
@@ -297,6 +300,49 @@ app.get("/usuario/:id/partidos", async (req, res) => {
     res.json(partidos);
   } catch (err) {
     res.status(500).json({ error: "Error al obtener partidos" });
+  }
+});
+
+// Eliminar un partido y su tarjeta asociada
+app.delete("/partidos/:id", async (req, res) => {
+  try {
+    const partidoId = parseInt(req.params.id, 10);
+
+    if (isNaN(partidoId)) {
+      return res.status(400).json({ error: "ID de partido inválido" });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Buscar el partido y su tarjeta
+      const partido = await tx.partido.findUnique({
+        where: { id: partidoId },
+        include: { tarjeta: true },
+      });
+
+      if (!partido) {
+        throw new HttpError(404, "Partido no encontrado");
+      }
+
+      // Si tiene tarjeta, eliminar primero la tarjeta (esto desconecta las relaciones con usuarios)
+      if (partido.tarjeta) {
+        await tx.tarjeta.delete({
+          where: { id: partido.tarjeta.id },
+        });
+      }
+
+      // Luego eliminar el partido
+      await tx.partido.delete({
+        where: { id: partidoId },
+      });
+    });
+
+    res.json({ mensaje: "Partido eliminado correctamente" });
+  } catch (err) {
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    console.error(err);
+    res.status(500).json({ error: "Error al eliminar el partido" });
   }
 });
 
