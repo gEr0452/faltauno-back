@@ -1,6 +1,16 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";;
+import { PrismaClient } from "@prisma/client";
 import cors from "cors";
+
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    Object.setPrototypeOf(this, HttpError.prototype);
+  }
+}
 
 const app = express();
 const prisma = new PrismaClient();
@@ -112,18 +122,115 @@ app.post("/tarjetas/:id/inscribir", async (req, res) => {
     const { id } = req.params;
     const { usuarioId } = req.body;
 
-    const tarjeta = await prisma.tarjeta.update({
-      where: { id: parseInt(id) },
-      data: {
-        usuarios: { connect: { id: parseInt(usuarioId) } },
-      },
-      include: { usuarios: true },
+    const tarjetaId = parseInt(id, 10);
+    const usuarioIdNumber = parseInt(usuarioId, 10);
+
+    if (isNaN(tarjetaId) || isNaN(usuarioIdNumber)) {
+      throw new HttpError(400, "Identificadores inválidos para tarjeta o usuario");
+    }
+
+    const tarjetaActualizada = await prisma.$transaction(async (tx) => {
+      const tarjeta = await tx.tarjeta.findUnique({
+        where: { id: tarjetaId },
+        include: { usuarios: true, partido: true },
+      });
+
+      if (!tarjeta) {
+        throw new HttpError(404, "Tarjeta no encontrada");
+      }
+
+      const yaInscripto = tarjeta.usuarios.some((usuario) => usuario.id === usuarioIdNumber);
+      if (yaInscripto) {
+        throw new HttpError(409, "El usuario ya está inscrito en este partido");
+      }
+
+      if (tarjeta.partido.jugadoresFaltantes <= 0) {
+        throw new HttpError(409, "No hay cupos disponibles para este partido");
+      }
+
+      await tx.partido.update({
+        where: { id: tarjeta.partidoId },
+        data: { jugadoresFaltantes: { decrement: 1 } },
+      });
+
+      return tx.tarjeta.update({
+        where: { id: tarjetaId },
+        data: {
+          usuarios: { connect: { id: usuarioIdNumber } },
+        },
+        include: { usuarios: true, partido: true },
+      });
     });
 
-    res.json(tarjeta);
+    res.json(tarjetaActualizada);
   } catch (err) {
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
     console.error(err);
     res.status(500).json({ error: "Error al inscribir usuario en tarjeta" });
+  }
+});
+
+// Dar de baja a un usuario de una tarjeta
+app.post("/tarjetas/:id/desinscribir", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { usuarioId } = req.body;
+
+    const tarjetaId = parseInt(id, 10);
+    const usuarioIdNumber = parseInt(usuarioId, 10);
+
+    if (isNaN(tarjetaId) || isNaN(usuarioIdNumber)) {
+      throw new HttpError(400, "Identificadores inválidos para tarjeta o usuario");
+    }
+
+    const tarjetaActualizada = await prisma.$transaction(async (tx) => {
+      const tarjeta = await tx.tarjeta.findUnique({
+        where: { id: tarjetaId },
+        include: { usuarios: true, partido: true },
+      });
+
+      if (!tarjeta) {
+        throw new HttpError(404, "Tarjeta no encontrada");
+      }
+
+      const estaInscripto = tarjeta.usuarios.some((usuario) => usuario.id === usuarioIdNumber);
+      if (!estaInscripto) {
+        throw new HttpError(409, "El usuario no está inscrito en este partido");
+      }
+
+      await tx.tarjeta.update({
+        where: { id: tarjetaId },
+        data: {
+          usuarios: { disconnect: { id: usuarioIdNumber } },
+        },
+      });
+
+      await tx.partido.update({
+        where: { id: tarjeta.partidoId },
+        data: { jugadoresFaltantes: { increment: 1 } },
+      });
+
+      const tarjetaFinal = await tx.tarjeta.findUnique({
+        where: { id: tarjetaId },
+        include: { usuarios: true, partido: true },
+      });
+
+      if (!tarjetaFinal) {
+        throw new HttpError(500, "Error al actualizar la tarjeta");
+      }
+
+      return tarjetaFinal;
+    });
+
+    res.json(tarjetaActualizada);
+  } catch (err) {
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    console.error(err);
+    res.status(500).json({ error: "Error al dar de baja al usuario en la tarjeta" });
   }
 });
 
