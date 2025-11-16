@@ -1,6 +1,7 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import cors from "cors";
+import bcrypt from "bcryptjs";
 
 class HttpError extends Error {
   status: number;
@@ -20,6 +21,109 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+// Registrar nuevo usuario
+app.post("/auth/register", async (req, res) => {
+  try {
+    const { nombre, correo, password } = req.body;
+
+    // Validación de datos
+    if (!nombre || !correo || !password) {
+      return res.status(400).json({ error: "Todos los campos son obligatorios" });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: "La contraseña debe tener al menos 6 caracteres" });
+    }
+
+    // Validar formato de email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(correo)) {
+      return res.status(400).json({ error: "El formato del correo electrónico no es válido" });
+    }
+
+    // Verificar si el usuario ya existe
+    const usuarioExistente = await prisma.usuario.findUnique({
+      where: { correo },
+    });
+
+    if (usuarioExistente) {
+      return res.status(409).json({ error: "El correo electrónico ya está registrado" });
+    }
+
+    // Hashear la contraseña
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Crear el usuario
+    const nuevoUsuario = await prisma.usuario.create({
+      data: {
+        nombre,
+        correo,
+        password: hashedPassword,
+      },
+      select: {
+        id: true,
+        nombre: true,
+        correo: true,
+        diasDisponibles: true,
+        horariosDisponibles: true,
+        barriosPreferidos: true,
+      },
+    });
+
+    res.status(201).json({
+      mensaje: "Usuario registrado correctamente",
+      usuario: nuevoUsuario,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al registrar usuario" });
+  }
+});
+
+// Iniciar sesión
+app.post("/auth/login", async (req, res) => {
+  try {
+    const { correo, password } = req.body;
+
+    // Validación de datos
+    if (!correo || !password) {
+      return res.status(400).json({ error: "Correo y contraseña son obligatorios" });
+    }
+
+    // Buscar el usuario
+    const usuario = await prisma.usuario.findUnique({
+      where: { correo },
+    });
+
+    if (!usuario) {
+      return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    // Verificar la contraseña
+    const passwordValida = await bcrypt.compare(password, usuario.password);
+
+    if (!passwordValida) {
+      return res.status(401).json({ error: "Credenciales inválidas" });
+    }
+
+    // Retornar datos del usuario (sin la contraseña)
+    res.json({
+      mensaje: "Inicio de sesión exitoso",
+      usuario: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        correo: usuario.correo,
+        diasDisponibles: usuario.diasDisponibles,
+        horariosDisponibles: usuario.horariosDisponibles,
+        barriosPreferidos: usuario.barriosPreferidos,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al iniciar sesión" });
+  }
+});
 
 // Crear un nuevo partido y su tarjeta asociada
 app.post("/partidos", async (req, res) => {
@@ -243,12 +347,29 @@ app.get("/tarjetas/:id/inscritos", async (req, res) => {
     const { id } = req.params;
     const tarjeta = await prisma.tarjeta.findUnique({
       where: { id: parseInt(id) },
-      include: { usuarios: true },
+      include: { 
+        usuarios: {
+          select: {
+            id: true,
+            nombre: true,
+            correo: true,
+          },
+        },
+      },
     });
 
     if (!tarjeta) return res.status(404).json({ error: "Tarjeta no encontrada" });
-    res.json(tarjeta.usuarios);
+    
+    // Retornar solo los campos necesarios con el nombre
+    const usuariosInscritos = tarjeta.usuarios.map((usuario) => ({
+      id: usuario.id,
+      nombre: usuario.nombre,
+      correo: usuario.correo,
+    }));
+    
+    res.json(usuariosInscritos);
   } catch (err) {
+    console.error("Error al obtener inscritos:", err);
     res.status(500).json({ error: "Error al obtener inscritos" });
   }
 });
@@ -295,10 +416,23 @@ app.get("/usuario/:id/partidos", async (req, res) => {
   try {
     const partidos = await prisma.partido.findMany({
       where: { usuarioId: parseInt(req.params.id) },
+      include: {
+        tarjeta: {
+          include: {
+            usuarios: {
+              select: {
+                id: true,
+                nombre: true,
+              },
+            },
+          },
+        },
+      },
       orderBy: { hora: "desc" },
     });
     res.json(partidos);
   } catch (err) {
+    console.error("Error al obtener partidos:", err);
     res.status(500).json({ error: "Error al obtener partidos" });
   }
 });
