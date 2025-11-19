@@ -197,7 +197,14 @@ app.get("/partidos", async (req, res) => {
 app.get("/tarjetas", async (req, res) => {
   try {
     const tarjetas = await prisma.tarjeta.findMany({
-      include: { partido: true, usuarios: true },
+      include: { 
+        partido: { 
+          include: { 
+            usuario: true 
+          } 
+        }, 
+        usuarios: true 
+      },
       orderBy: { id: "desc" },
     });
 
@@ -208,7 +215,8 @@ app.get("/tarjetas", async (req, res) => {
       jugadores: tarjeta.partido.jugadoresFaltantes,
       fecha: `${tarjeta.partido.dia} ${tarjeta.partido.hora}`,
       image: tarjeta.imagen,
-      usuario: `Usuario ${tarjeta.partido.usuarioId}`,
+      usuario: tarjeta.partido.usuario.nombre,
+      usuarioId: tarjeta.partido.usuarioId,
       inscritos: tarjeta.usuarios.map((u) => ({
         id: u.id,
         nombre: u.nombre,
@@ -244,6 +252,11 @@ app.post("/tarjetas/:id/inscribir", async (req, res) => {
 
       if (!tarjeta) {
         throw new HttpError(404, "Tarjeta no encontrada");
+      }
+
+      // Verificar que el usuario no sea el creador del partido
+      if (tarjeta.partido.usuarioId === usuarioIdNumber) {
+        throw new HttpError(403, "No puedes inscribirte a un partido que tú creaste");
       }
 
       const yaInscripto = tarjeta.usuarios.some((usuario) => usuario.id === usuarioIdNumber);
