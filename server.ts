@@ -20,7 +20,7 @@ app.use(cors({
   origin: ['http://localhost:8081', 'exp://192.168.1.3:8081'], // URLs de Expo
   credentials: true
 }));
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 // Registrar nuevo usuario
 app.post("/auth/register", async (req, res) => {
@@ -225,7 +225,7 @@ app.get("/tarjetas", async (req, res) => {
     const where: any = {
       partido: {
         ...(lugar ? { lugar: { contains: String(lugar) } } : {}),
-        ...(posicion ? { posicionFaltante: String(posicion) } : {}),
+        ...(posicion ? { posicionFaltante: { contains: String(posicion) } } : {}),
         ...(prefijosHorario
           ? { OR: prefijosHorario.map((prefijo) => ({ hora: { startsWith: prefijo } })) }
           : {}),
