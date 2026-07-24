@@ -18,19 +18,26 @@ model Usuario {
   barriosPreferidos   String?
   historial           Partido[] @relation("UsuarioAPartidos")
   tarjetasInscritas   Tarjeta[] @relation("UsuariosInscriptos")
-  imagen              String? 
+  imagen              String?
+  resenasEscritas     Resena[]  @relation("ResenasEscritas")
+  resenasRecibidas    Resena[]  @relation("ResenasRecibidas")
 }
 
 model Partido {
-  id                 Int      @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   cancha             String
   lugar              String
   dia                String
   hora               String
   jugadoresFaltantes Int
-  usuario            Usuario  @relation("UsuarioAPartidos", fields: [usuarioId], references: [id])
+  latitud            Float?
+  longitud           Float?
+  posicionFaltante   String?
+  fechaHora          DateTime?
+  usuario            Usuario   @relation("UsuarioAPartidos", fields: [usuarioId], references: [id])
   usuarioId          Int
   tarjeta            Tarjeta?
+  resenas            Resena[]
 }
 
 model Tarjeta {
@@ -39,4 +46,19 @@ model Tarjeta {
   partidoId Int        @unique
   usuarios  Usuario[]  @relation("UsuariosInscriptos")
   imagen    String?
+}
+
+model Resena {
+  id           Int      @id @default(autoincrement())
+  calificacion Int
+  comentario   String?
+  autor        Usuario  @relation("ResenasEscritas", fields: [autorId], references: [id])
+  autorId      Int
+  receptor     Usuario  @relation("ResenasRecibidas", fields: [receptorId], references: [id])
+  receptorId   Int
+  partido      Partido  @relation(fields: [partidoId], references: [id])
+  partidoId    Int
+  createdAt    DateTime @default(now())
+
+  @@unique([autorId, receptorId, partidoId])
 }

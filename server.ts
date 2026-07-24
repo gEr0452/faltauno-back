@@ -68,6 +68,7 @@ app.post("/auth/register", async (req, res) => {
         diasDisponibles: true,
         horariosDisponibles: true,
         barriosPreferidos: true,
+        imagen: true,
       },
     });
 
@@ -117,6 +118,7 @@ app.post("/auth/login", async (req, res) => {
         diasDisponibles: usuario.diasDisponibles,
         horariosDisponibles: usuario.horariosDisponibles,
         barriosPreferidos: usuario.barriosPreferidos,
+        imagen: usuario.imagen,
       },
     });
   } catch (err) {
@@ -137,17 +139,25 @@ app.post("/partidos", async (req, res) => {
       hora: string;
       jugadoresFaltantes: string;
       usuarioId: string;
-      imagen?: string; 
+      imagen?: string;
+      latitud?: number;
+      longitud?: number;
+      posicionFaltante?: string;
+      fechaHora?: string;
     }
-    
-    const { 
-      cancha, 
-      lugar, 
-      dia, 
-      hora, 
-      jugadoresFaltantes, 
-      usuarioId, 
-      imagen 
+
+    const {
+      cancha,
+      lugar,
+      dia,
+      hora,
+      jugadoresFaltantes,
+      usuarioId,
+      imagen,
+      latitud,
+      longitud,
+      posicionFaltante,
+      fechaHora,
     }: PartidoRequestBody = req.body;
 
     // Crear el partido
@@ -159,6 +169,10 @@ app.post("/partidos", async (req, res) => {
         hora,
         jugadoresFaltantes: parseInt(jugadoresFaltantes),
         usuario: { connect: { id: parseInt(usuarioId) } },
+        latitud: latitud ?? null,
+        longitud: longitud ?? null,
+        posicionFaltante: posicionFaltante || null,
+        fechaHora: fechaHora ? new Date(fechaHora) : null,
       },
     });
 
@@ -193,20 +207,48 @@ app.get("/partidos", async (req, res) => {
   }
 });
 
+// Franjas horarias para el filtro "horario" (aproximado, hora es texto libre "HH:MM")
+const FRANJAS_HORARIAS: Record<string, string[]> = {
+  manana: ["06", "07", "08", "09", "10", "11"],
+  tarde: ["12", "13", "14", "15", "16", "17", "18"],
+  noche: ["19", "20", "21", "22", "23", "00", "01", "02", "03", "04", "05"],
+};
+
 // Obtener todas las tarjetas con su partido y usuarios inscritos
 app.get("/tarjetas", async (req, res) => {
   try {
-    const tarjetas = await prisma.tarjeta.findMany({
-      include: { 
-        partido: { 
-          include: { 
-            usuario: true 
-          } 
-        }, 
-        usuarios: true 
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const pageSize = Math.max(1, parseInt(req.query.limit as string) || 10);
+    const { lugar, posicion, horario } = req.query;
+    const prefijosHorario = horario ? FRANJAS_HORARIAS[String(horario)] : undefined;
+
+    const where: any = {
+      partido: {
+        ...(lugar ? { lugar: { contains: String(lugar) } } : {}),
+        ...(posicion ? { posicionFaltante: String(posicion) } : {}),
+        ...(prefijosHorario
+          ? { OR: prefijosHorario.map((prefijo) => ({ hora: { startsWith: prefijo } })) }
+          : {}),
       },
-      orderBy: { id: "desc" },
-    });
+    };
+
+    const [tarjetas, total] = await Promise.all([
+      prisma.tarjeta.findMany({
+        where,
+        include: {
+          partido: {
+            include: {
+              usuario: true
+            }
+          },
+          usuarios: true
+        },
+        orderBy: { id: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.tarjeta.count({ where }),
+    ]);
 
     const tarjetasFormateadas = tarjetas.map((tarjeta) => ({
       id: tarjeta.id,
@@ -217,13 +259,18 @@ app.get("/tarjetas", async (req, res) => {
       image: tarjeta.imagen,
       usuario: tarjeta.partido.usuario.nombre,
       usuarioId: tarjeta.partido.usuarioId,
+      usuarioImagen: tarjeta.partido.usuario.imagen,
+      latitud: tarjeta.partido.latitud,
+      longitud: tarjeta.partido.longitud,
+      posicionFaltante: tarjeta.partido.posicionFaltante,
+      fechaHora: tarjeta.partido.fechaHora,
       inscritos: tarjeta.usuarios.map((u) => ({
         id: u.id,
         nombre: u.nombre,
       })),
     }));
 
-    res.json(tarjetasFormateadas); 
+    res.json({ items: tarjetasFormateadas, total, page, pageSize });
   } catch (err) {
     console.error("Error al obtener tarjetas:", err);
     res.status(500).json({ error: "Error al obtener tarjetas" });
@@ -360,24 +407,26 @@ app.get("/tarjetas/:id/inscritos", async (req, res) => {
     const { id } = req.params;
     const tarjeta = await prisma.tarjeta.findUnique({
       where: { id: parseInt(id) },
-      include: { 
+      include: {
         usuarios: {
           select: {
             id: true,
             nombre: true,
             correo: true,
+            imagen: true,
           },
         },
       },
     });
 
     if (!tarjeta) return res.status(404).json({ error: "Tarjeta no encontrada" });
-    
+
     // Retornar solo los campos necesarios con el nombre
     const usuariosInscritos = tarjeta.usuarios.map((usuario) => ({
       id: usuario.id,
       nombre: usuario.nombre,
       correo: usuario.correo,
+      imagen: usuario.imagen,
     }));
     
     res.json(usuariosInscritos);
@@ -398,6 +447,7 @@ app.get("/usuario/:id", async (req, res) => {
         diasDisponibles: true,
         horariosDisponibles: true,
         barriosPreferidos: true,
+        imagen: true,
       },
     });
 
@@ -424,6 +474,31 @@ app.put("/usuario/:id/preferencias", async (req, res) => {
   }
 });
 
+// Actualizar foto de perfil
+app.put("/usuario/:id/imagen", async (req, res) => {
+  try {
+    const { imagen } = req.body;
+
+    const usuario = await prisma.usuario.update({
+      where: { id: parseInt(req.params.id) },
+      data: { imagen: imagen || null },
+      select: {
+        id: true,
+        nombre: true,
+        correo: true,
+        diasDisponibles: true,
+        horariosDisponibles: true,
+        barriosPreferidos: true,
+        imagen: true,
+      },
+    });
+
+    res.json(usuario);
+  } catch (err) {
+    res.status(500).json({ error: "Error al actualizar la foto de perfil" });
+  }
+});
+
 // Obtener partidos creados por el usuario
 app.get("/usuario/:id/partidos", async (req, res) => {
   try {
@@ -436,6 +511,7 @@ app.get("/usuario/:id/partidos", async (req, res) => {
               select: {
                 id: true,
                 nombre: true,
+                imagen: true,
               },
             },
           },
@@ -477,6 +553,9 @@ app.delete("/partidos/:id", async (req, res) => {
         });
       }
 
+      // Eliminar reseñas asociadas antes de borrar el partido (evita violar la FK)
+      await tx.resena.deleteMany({ where: { partidoId } });
+
       // Luego eliminar el partido
       await tx.partido.delete({
         where: { id: partidoId },
@@ -499,7 +578,7 @@ app.get("/usuario/:id/tarjetas-inscritas", async (req, res) => {
     const usuario = await prisma.usuario.findUnique({
       where: { id: parseInt(req.params.id) },
       include: {
-        tarjetasInscritas: { include: { partido: true } },
+        tarjetasInscritas: { include: { partido: { include: { usuario: true } } } },
       },
     });
 
@@ -507,17 +586,111 @@ app.get("/usuario/:id/tarjetas-inscritas", async (req, res) => {
 
     const tarjetas = usuario.tarjetasInscritas.map((t) => ({
       id: t.id,
+      partidoId: t.partidoId,
       cancha: t.partido.cancha,
       lugar: t.partido.lugar,
       dia: t.partido.dia,
       hora: t.partido.hora,
       jugadoresFaltantes: t.partido.jugadoresFaltantes,
+      usuario: t.partido.usuario.nombre,
+      usuarioId: t.partido.usuarioId,
+      fechaHora: t.partido.fechaHora,
     }));
 
     res.json(tarjetas);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener tarjetas inscritas" });
+  }
+});
+
+// Crear una reseña de un jugador sobre otro, luego de un partido pasado
+app.post("/resenas", async (req, res) => {
+  try {
+    const { autorId, receptorId, partidoId, calificacion, comentario } = req.body;
+
+    const autorIdNum = parseInt(autorId, 10);
+    const receptorIdNum = parseInt(receptorId, 10);
+    const partidoIdNum = parseInt(partidoId, 10);
+    const calificacionNum = parseInt(calificacion, 10);
+
+    if (isNaN(autorIdNum) || isNaN(receptorIdNum) || isNaN(partidoIdNum)) {
+      throw new HttpError(400, "Identificadores inválidos");
+    }
+
+    if (autorIdNum === receptorIdNum) {
+      throw new HttpError(400, "No podés calificarte a vos mismo");
+    }
+
+    if (isNaN(calificacionNum) || calificacionNum < 1 || calificacionNum > 5) {
+      throw new HttpError(400, "La calificación debe ser un número entre 1 y 5");
+    }
+
+    const partido = await prisma.partido.findUnique({
+      where: { id: partidoIdNum },
+      include: { tarjeta: { include: { usuarios: true } } },
+    });
+
+    if (!partido) {
+      throw new HttpError(404, "Partido no encontrado");
+    }
+
+    if (!partido.fechaHora || partido.fechaHora > new Date()) {
+      throw new HttpError(403, "Solo se pueden calificar partidos que ya sucedieron");
+    }
+
+    const participantes = new Set<number>([
+      partido.usuarioId,
+      ...(partido.tarjeta?.usuarios.map((u) => u.id) ?? []),
+    ]);
+
+    if (!participantes.has(autorIdNum) || !participantes.has(receptorIdNum)) {
+      throw new HttpError(403, "Ambos usuarios deben haber participado de este partido");
+    }
+
+    const resena = await prisma.resena.create({
+      data: {
+        calificacion: calificacionNum,
+        comentario: comentario || null,
+        autor: { connect: { id: autorIdNum } },
+        receptor: { connect: { id: receptorIdNum } },
+        partido: { connect: { id: partidoIdNum } },
+      },
+    });
+
+    res.status(201).json(resena);
+  } catch (err) {
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+    if ((err as any)?.code === "P2002") {
+      return res.status(409).json({ error: "Ya calificaste a este usuario para este partido" });
+    }
+    console.error(err);
+    res.status(500).json({ error: "Error al crear la reseña" });
+  }
+});
+
+// Obtener las reseñas recibidas por un usuario y su promedio
+app.get("/usuario/:id/resenas", async (req, res) => {
+  try {
+    const receptorId = parseInt(req.params.id);
+
+    const resenas = await prisma.resena.findMany({
+      where: { receptorId },
+      include: {
+        autor: { select: { id: true, nombre: true, imagen: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const total = resenas.length;
+    const promedio = total > 0 ? resenas.reduce((suma, r) => suma + r.calificacion, 0) / total : 0;
+
+    res.json({ resenas, promedio, total });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener las reseñas" });
   }
 });
 
