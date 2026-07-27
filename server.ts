@@ -466,6 +466,15 @@ app.put("/usuario/:id/preferencias", async (req, res) => {
     const usuario = await prisma.usuario.update({
       where: { id: parseInt(req.params.id) },
       data: { diasDisponibles, horariosDisponibles, barriosPreferidos },
+      select: {
+        id: true,
+        nombre: true,
+        correo: true,
+        diasDisponibles: true,
+        horariosDisponibles: true,
+        barriosPreferidos: true,
+        imagen: true,
+      },
     });
 
     res.json(usuario);
